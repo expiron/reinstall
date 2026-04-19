@@ -107,6 +107,8 @@ Usage: $reinstall_____ anolis      7|8|23
                        [--ssh-port    PORT]
                        [--web-port    PORT]
                        [--frpc-config PATH]
+                       [--preseed     PATH/URL]
+                       [--cloud-cfg   PATH/URL]
 
                        For Windows Only:
                        [--allow-ping]
@@ -3167,7 +3169,7 @@ build_nextos_cmdline() {
         # 如果要设置位数: video=800x600-16
         nextos_cmdline="lowmem/low=1 auto=true priority=critical"
         # nextos_cmdline+=" vga=788 video=800x600"
-        nextos_cmdline+=" url=$nextos_ks"
+        nextos_cmdline+=" file=/preseed.cfg"
         nextos_cmdline+=" mirror/http/hostname=${nextos_udeb_mirror%/*}"
         nextos_cmdline+=" mirror/http/directory=/${nextos_udeb_mirror##*/}"
         nextos_cmdline+=" base-installer/kernel/image=$nextos_kernel"
@@ -3835,6 +3837,35 @@ This script is outdated, please download reinstall.sh again.
     curl -Lo $initrd_dir/initrd-network.sh $confhome/initrd-network.sh
     chmod a+x $initrd_dir/trans.sh $initrd_dir/initrd-network.sh
 
+    # 下载 preseed 文件到 initramfs (Debian 系列)
+    if is_distro_like_debian $nextos_distro; then
+        if [ -n "$custom_preseed" ]; then
+            preseed_source=$custom_preseed
+        else
+            preseed_source=$nextos_ks
+        fi
+        case "$(to_lower <<<"$preseed_source")" in
+        http://* | https://*)
+            curl -fsSL "$preseed_source" -o $initrd_dir/preseed.cfg
+            ;;
+        *)
+            cp "$preseed_source" $initrd_dir/preseed.cfg
+            ;;
+        esac
+    fi
+
+    # 下载 cloud-init 配置文件到 initramfs
+    if [ -n "$custom_cloud_cfg" ]; then
+        case "$(to_lower <<<"$custom_cloud_cfg")" in
+        http://* | https://*)
+            curl -fsSL "$custom_cloud_cfg" -o $initrd_dir/cloud.cfg
+            ;;
+        *)
+            cp "$custom_cloud_cfg" $initrd_dir/cloud.cfg
+            ;;
+        esac
+    fi
+
     # 保存配置
     mkdir -p $initrd_dir/configs
     if [ -n "$ssh_keys" ]; then
@@ -4309,6 +4340,8 @@ for o in ci installer debug minimal allow-ping force-cn help \
     boot-wim: \
     img: \
     cloud-data: \
+    preseed: \
+    cloud-cfg: \
     lang: \
     passwd: password: \
     ssh-port: \
@@ -4603,6 +4636,38 @@ EOF
         ;;
     --lang)
         lang=$(echo "$2" | to_lower)
+        shift 2
+        ;;
+    --preseed)
+        [ -n "$2" ] || error_and_exit "Need value for $1"
+
+        case "$(to_lower <<<"$2")" in
+        http://* | https://*)
+            custom_preseed=$2
+            ;;
+        *)
+            if ! { custom_preseed=$(get_unix_path "$2") && [ -f "$custom_preseed" ]; }; then
+                error_and_exit "File not exists: $2"
+            fi
+            ;;
+        esac
+
+        shift 2
+        ;;
+    --cloud-cfg)
+        [ -n "$2" ] || error_and_exit "Need value for $1"
+
+        case "$(to_lower <<<"$2")" in
+        http://* | https://*)
+            custom_cloud_cfg=$2
+            ;;
+        *)
+            if ! { custom_cloud_cfg=$(get_unix_path "$2") && [ -f "$custom_cloud_cfg" ]; }; then
+                error_and_exit "File not exists: $2"
+            fi
+            ;;
+        esac
+
         shift 2
         ;;
     --)
