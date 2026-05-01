@@ -32,6 +32,10 @@ export LC_ALL=C
 # 不要漏了最后的 $PATH，否则会找不到 windows 系统程序例如 diskpart
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH
 
+# 初始化自定义文件数组
+custom_add_files_source=()
+custom_add_files_dest=()
+
 # 如果不是 bash 的话，继续执行会有语法错误，因此在这里判断是否 bash
 if [ -z "$BASH" ] ||
     # el 的 sh 是 bash 运行在 posix 模式，依然有 $BASH 和 $BASH_VERSION
@@ -109,6 +113,7 @@ Usage: $reinstall_____ anolis      7|8|23
                        [--frpc-config PATH]
                        [--preseed     PATH/URL]
                        [--cloud-cfg   PATH/URL]
+                       [--add-file    SOURCE:DEST]
 
                        For Windows Only:
                        [--allow-ping]
@@ -3839,6 +3844,35 @@ This script is outdated, please download reinstall.sh again.
         esac
     fi
 
+    # 添加自定义文件到 initramfs
+    if [ ${#custom_add_files_source[@]} -gt 0 ]; then
+        info "Adding custom files to initramfs..."
+        local i=0
+        while [ $i -lt ${#custom_add_files_source[@]} ]; do
+            local src="${custom_add_files_source[$i]}"
+            local dest="${custom_add_files_dest[$i]}"
+            local dest_dir="${dest%/*}"
+
+            # 创建目标目录
+            mkdir -p "$initrd_dir/$dest_dir"
+
+            # 复制文件
+            case "$(to_lower <<<"$src")" in
+            http://* | https://*)
+                # 从 URL 下载
+                curl -fsSL "$src" -o "$initrd_dir/$dest"
+                ;;
+            *)
+                # 从本地文件复制
+                cp "$src" "$initrd_dir/$dest"
+                ;;
+            esac
+
+            info "Added: $src -> $dest"
+            i=$((i + 1))
+        done
+    fi
+
     # 保存配置
     mkdir -p $initrd_dir/configs
     if [ -n "$ssh_keys" ]; then
@@ -4314,6 +4348,7 @@ for o in ci installer debug minimal allow-ping force-cn help \
     cloud-data: \
     preseed: \
     cloud-cfg: \
+    add-file: \
     lang: \
     passwd: password: \
     ssh-port: \
@@ -4639,6 +4674,39 @@ EOF
             fi
             ;;
         esac
+
+        shift 2
+        ;;
+    --add-file)
+        [ -n "$2" ] || error_and_exit "Need value for $1"
+
+        # 解析 SOURCE:DEST 格式
+        local file_spec="$2"
+        local source="${file_spec%%:*}"
+        local dest="${file_spec#*:}"
+
+        [ -n "$source" ] || error_and_exit "Missing source in $1"
+        [ -n "$dest" ] || error_and_exit "Missing destination in $1"
+        [ "$source" != "$file_spec" ] || error_and_exit "Invalid format for $1, expected SOURCE:DEST"
+
+        # 处理源文件（支持 URL 和本地文件）
+        case "$(to_lower <<<"$source")" in
+        http://* | https://*)
+            # URL 文件
+            custom_add_files_source+=("$source")
+            ;;
+        *)
+            # 本地文件
+            local local_file
+            if ! { local_file=$(get_unix_path "$source") && [ -f "$local_file" ]; }; then
+                error_and_exit "File not exists: $source"
+            fi
+            custom_add_files_source+=("$local_file")
+            ;;
+        esac
+
+        # 保存目标路径
+        custom_add_files_dest+=("$dest")
 
         shift 2
         ;;
