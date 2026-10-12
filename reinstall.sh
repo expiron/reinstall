@@ -50,6 +50,10 @@ if [ -z "$BASH" ] ||
     exec bash "$0" "$@"
 fi
 
+# 初始化自定义文件数组
+custom_add_files_source=()
+custom_add_files_dest=()
+
 # 好像跟 trap SIGINT 有冲突
 # 记录日志，过滤含有 password 的行
 # exec > >(tee >(grep -iv password >>/reinstall.log)) 2>&1
@@ -109,6 +113,7 @@ Usage: $reinstall_____ anolis      7|8|23
                        [--frpc-config PATH]
                        [--preseed     PATH/URL]
                        [--cloud-cfg   PATH/URL]
+                       [--add-file    SOURCE:DEST]
 
                        For Windows Only:
                        [--allow-ping]
@@ -3868,6 +3873,37 @@ This script is outdated, please download reinstall.sh again.
         esac
     fi
 
+    # 添加自定义文件到 initramfs
+    if [ ${#custom_add_files_source[@]} -gt 0 ]; then
+        info "Adding custom files to initramfs..."
+        local i=0
+        while [ $i -lt ${#custom_add_files_source[@]} ]; do
+            local src="${custom_add_files_source[$i]}"
+            local dest="${custom_add_files_dest[$i]}"
+            local dest_dir="${dest%/*}"
+
+            # 创建目标目录
+            if [ "$dest_dir" != "$dest" ] && [ -n "$dest_dir" ]; then
+                mkdir -p "$initrd_dir/$dest_dir"
+            fi
+
+            # 复制文件
+            case "$(to_lower <<<"$src")" in
+            http://* | https://*)
+                # 从 URL 下载
+                curl -fsSL "$src" -o "$initrd_dir/$dest"
+                ;;
+            *)
+                # 从本地文件复制
+                cp "$src" "$initrd_dir/$dest"
+                ;;
+            esac
+
+            info "Added: $src -> $dest"
+            i=$((i + 1))
+        done
+    fi
+
     # 保存配置
     mkdir -p $initrd_dir/configs
     if [ -n "$ssh_keys" ]; then
@@ -4344,6 +4380,7 @@ for o in ci installer debug minimal allow-ping force-cn help \
     cloud-data: \
     preseed: \
     cloud-cfg: \
+    add-file: \
     lang: \
     passwd: password: \
     ssh-port: \
@@ -4669,6 +4706,42 @@ EOF
             fi
             ;;
         esac
+
+        shift 2
+        ;;
+    --add-file)
+        [ -n "$2" ] || error_and_exit "Need value for $1"
+
+        # 解析 SOURCE:DEST 格式
+        _add_file_spec="$2"
+        _add_file_source="${_add_file_spec%:*}"
+        _add_file_dest="${_add_file_spec##*:}"
+
+        [ -n "$_add_file_source" ] || error_and_exit "Missing source in $1"
+        [ -n "$_add_file_dest" ] || error_and_exit "Missing destination in $1"
+        [ "$_add_file_source" != "$_add_file_spec" ] || error_and_exit "Invalid format for $1, expected SOURCE:DEST"
+        case "/$_add_file_dest/" in
+        */../*) error_and_exit "Invalid destination in $1: parent directory is not allowed" ;;
+        esac
+
+        # 处理源文件（支持 URL 和本地文件）
+        case "$(to_lower <<<"$_add_file_source")" in
+        http://* | https://*)
+            # URL 文件
+            custom_add_files_source+=("$_add_file_source")
+            ;;
+        *)
+            # 本地文件
+            if ! { _add_file_local_file=$(get_unix_path "$_add_file_source") && [ -f "$_add_file_local_file" ]; }; then
+                error_and_exit "File not exists: $_add_file_source"
+            fi
+            _add_file_local_file=$(readlink -f "$_add_file_local_file")
+            custom_add_files_source+=("$_add_file_local_file")
+            ;;
+        esac
+
+        # 保存目标路径
+        custom_add_files_dest+=("$_add_file_dest")
 
         shift 2
         ;;
